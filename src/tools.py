@@ -1,448 +1,484 @@
-import pandas as pd
+"""
+AIRPORT OPERATIONS AI COPILOT
+DAY 4 - SAFE OPERATIONAL TOOLS
 
+Tools:
+1. get_airport_metrics
+2. calculate_driver_incentive
+3. trigger_surge_override
 
-DATA_PATH = "data/airport_operations.csv"
+Day 4 additions:
+- Input validation
+- Risk classification
+- Policy validation
+- Human approval
+- Output validation
+"""
 
-VALID_AIRPORTS = {"SFO", "LAX", "JFK"}
+from typing import Any, Dict
 
-
-# ============================================================
-# LOAD DATA
-# ============================================================
-
-def load_operational_data():
-    """
-    Load airport operational telemetry.
-    """
-
-    try:
-        data = pd.read_csv(DATA_PATH)
-
-        required_columns = {
-            "timestamp",
-            "airport",
-            "queue_size",
-            "active_drivers",
-            "request_volume",
-            "completion_rate",
-            "average_eta_minutes",
-            "passenger_wait_time_minutes",
-            "driver_cancellation_rate",
-            "surge_multiplier",
-        }
-
-        missing_columns = required_columns - set(data.columns)
-
-        if missing_columns:
-            return {
-                "success": False,
-                "error": (
-                    "Dataset is missing required columns: "
-                    + ", ".join(sorted(missing_columns))
-                ),
-            }
-
-        return {
-            "success": True,
-            "data": data,
-        }
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": f"Failed to load operational data: {str(e)}",
-        }
+from .guardrails import (
+    VALID_AIRPORTS,
+    validate_airport_code,
+    validate_driver_count,
+    validate_severity,
+    validate_reason,
+    validate_surge_multiplier,
+    classify_incentive_risk,
+    validate_tool_output,
+    guard_surge_action,
+)
 
 
 # ============================================================
-# TOOL 1 — AIRPORT METRICS
+# MOCK AIRPORT DATA
 # ============================================================
 
-def get_airport_metrics(airport_code):
+AIRPORT_METRICS = {
+    "SFO": {
+        "completion_rate": 0.943,
+        "average_eta_minutes": 8.8,
+        "active_drivers": 145,
+        "driver_cancellation_rate": 0.060,
+        "queue_size": 45,
+        "surge_multiplier": 1.1,
+        "request_volume": 146,
+        "timestamp": "2026-09-01 22:00",
+    },
+    "LAX": {
+        "completion_rate": 0.947,
+        "average_eta_minutes": 8.5,
+        "active_drivers": 149,
+        "driver_cancellation_rate": 0.055,
+        "queue_size": 44,
+        "surge_multiplier": 1.0,
+        "request_volume": 142,
+        "timestamp": "2026-09-01 22:00",
+    },
+    "JFK": {
+        "completion_rate": 0.935,
+        "average_eta_minutes": 9.9,
+        "active_drivers": 133,
+        "driver_cancellation_rate": 0.067,
+        "queue_size": 42,
+        "surge_multiplier": 1.1,
+        "request_volume": 140,
+        "timestamp": "2026-09-01 22:00",
+    },
+}
+
+
+# ============================================================
+# TOOL 1 — GET AIRPORT METRICS
+# ============================================================
+
+def get_airport_metrics(
+    airport_code: str,
+) -> Dict[str, Any]:
     """
-    Return operational metrics for an airport.
+    Read airport operational metrics.
+
+    Risk level:
+        LOW
+
+    Approval:
+        NOT REQUIRED
     """
 
-    if not airport_code:
+    validation = validate_airport_code(
+        airport_code
+    )
+
+    if not validation["valid"]:
         return {
             "success": False,
-            "error": "airport_code is required.",
-        }
-
-    airport_code = airport_code.upper().strip()
-
-    if airport_code not in VALID_AIRPORTS:
-        return {
-            "success": False,
-            "error": (
-                f"Invalid airport code '{airport_code}'. "
-                "Valid airports are SFO, LAX, and JFK."
-            ),
-        }
-
-    result = load_operational_data()
-
-    if not result["success"]:
-        return result
-
-    data = result["data"]
-
-    airport_data = data[
-        data["airport"].str.upper() == airport_code
-    ]
-
-    if airport_data.empty:
-        return {
-            "success": False,
-            "error": f"No operational data found for {airport_code}.",
-        }
-
-    try:
-        latest = airport_data.sort_values(
-            "timestamp"
-        ).iloc[-1]
-
-        return {
-            "success": True,
             "tool": "get_airport_metrics",
-            "airport_code": airport_code,
-            "metrics": {
-                "completion_rate": round(
-                    float(latest["completion_rate"]), 3
-                ),
-                "average_eta_minutes": round(
-                    float(latest["average_eta_minutes"]), 2
-                ),
-                "active_drivers": int(
-                    latest["active_drivers"]
-                ),
-                "driver_cancellation_rate": round(
-                    float(
-                        latest[
-                            "driver_cancellation_rate"
-                        ]
-                    ),
-                    3,
-                ),
-                "queue_size": int(
-                    latest["queue_size"]
-                ),
-                "surge_multiplier": round(
-                    float(latest["surge_multiplier"]),
-                    2,
-                ),
-                "request_volume": int(
-                    latest["request_volume"]
-                ),
-                "timestamp": str(
-                    latest["timestamp"]
-                ),
-            },
+            "error": validation["error"],
         }
 
-    except Exception as e:
-        return {
-            "success": False,
-            "error": (
-                f"Failed to calculate airport metrics: {str(e)}"
-            ),
-        }
+    airport = validation["airport_code"]
 
-
-# ============================================================
-# TOOL 2 — DRIVER INCENTIVE CALCULATOR
-# ============================================================
-
-def calculate_driver_incentive(
-    driver_count,
-    severity_level,
-):
-    """
-    Calculate a recommended driver incentive.
-    """
-
-    if driver_count is None:
-        return {
-            "success": False,
-            "error": "driver_count is required.",
-        }
-
-    if severity_level is None:
-        return {
-            "success": False,
-            "error": "severity_level is required.",
-        }
-
-    try:
-        driver_count = int(driver_count)
-
-    except (TypeError, ValueError):
-        return {
-            "success": False,
-            "error": "driver_count must be an integer.",
-        }
-
-    if driver_count <= 0:
-        return {
-            "success": False,
-            "error": "driver_count must be greater than zero.",
-        }
-
-    severity_level = str(
-        severity_level
-    ).upper().strip()
-
-    incentive_rates = {
-        "LOW": 5.0,
-        "MEDIUM": 10.0,
-        "HIGH": 20.0,
+    result = {
+        "success": True,
+        "tool": "get_airport_metrics",
+        "airport_code": airport,
+        "metrics": AIRPORT_METRICS[airport],
     }
 
-    if severity_level not in incentive_rates:
+    output_check = validate_tool_output(
+        "get_airport_metrics",
+        result,
+    )
+
+    if not output_check["valid"]:
         return {
             "success": False,
-            "error": (
-                f"Invalid severity_level '{severity_level}'. "
-                "Use LOW, MEDIUM, or HIGH."
-            ),
+            "tool": "get_airport_metrics",
+            "error": output_check["error"],
         }
 
-    incentive_per_driver = incentive_rates[
+    return result
+
+
+# ============================================================
+# TOOL 2 — CALCULATE DRIVER INCENTIVE
+# ============================================================
+
+INCENTIVE_PER_DRIVER = {
+    "LOW": 5.0,
+    "MEDIUM": 10.0,
+    "HIGH": 20.0,
+}
+
+
+def calculate_driver_incentive(
+    driver_count: Any,
+    severity_level: Any,
+) -> Dict[str, Any]:
+    """
+    Calculate recommended driver incentive.
+
+    Calculation is allowed without approval.
+
+    Actual execution/payment is not performed here.
+    """
+
+    driver_validation = validate_driver_count(
+        driver_count
+    )
+
+    if not driver_validation["valid"]:
+        return {
+            "success": False,
+            "tool": "calculate_driver_incentive",
+            "error": driver_validation["error"],
+        }
+
+    severity_validation = validate_severity(
         severity_level
+    )
+
+    if not severity_validation["valid"]:
+        return {
+            "success": False,
+            "tool": "calculate_driver_incentive",
+            "error": severity_validation["error"],
+        }
+
+    count = driver_validation["driver_count"]
+    severity = severity_validation["severity_level"]
+
+    incentive_per_driver = INCENTIVE_PER_DRIVER[
+        severity
     ]
 
     estimated_total_cost = (
-        driver_count * incentive_per_driver
+        count * incentive_per_driver
     )
 
-    return {
+    risk = classify_incentive_risk(
+        estimated_total_cost
+    )
+
+    result = {
         "success": True,
         "tool": "calculate_driver_incentive",
-        "driver_count": driver_count,
-        "severity_level": severity_level,
+        "driver_count": count,
+        "severity_level": severity,
         "recommended_incentive_per_driver": (
             incentive_per_driver
         ),
         "estimated_total_cost": (
             estimated_total_cost
         ),
-    }
-
-
-# ============================================================
-# TOOL 3 — SURGE OVERRIDE
-# ============================================================
-
-def trigger_surge_override(
-    airport_code,
-    new_multiplier,
-    reason,
-):
-    """
-    Mock surge override execution.
-
-    Day 2 only performs a mock execution.
-    Approval controls will be implemented on Day 4.
-    """
-
-    if not airport_code:
-        return {
-            "success": False,
-            "error": "airport_code is required.",
-        }
-
-    if new_multiplier is None:
-        return {
-            "success": False,
-            "error": "new_multiplier is required.",
-        }
-
-    if not reason:
-        return {
-            "success": False,
-            "error": "reason is required.",
-        }
-
-    airport_code = airport_code.upper().strip()
-
-    if airport_code not in VALID_AIRPORTS:
-        return {
-            "success": False,
-            "error": (
-                f"Invalid airport code '{airport_code}'. "
-                "Valid airports are SFO, LAX, and JFK."
-            ),
-        }
-
-    try:
-        new_multiplier = float(new_multiplier)
-
-    except (TypeError, ValueError):
-        return {
-            "success": False,
-            "error": "new_multiplier must be a number.",
-        }
-
-    if new_multiplier <= 0:
-        return {
-            "success": False,
-            "error": (
-                "new_multiplier must be greater than zero."
-            ),
-        }
-
-    return {
-        "success": True,
-        "tool": "trigger_surge_override",
-        "execution": "MOCK",
-        "airport_code": airport_code,
-        "new_multiplier": new_multiplier,
-        "reason": reason,
-        "status": "SURGE_OVERRIDE_TRIGGERED",
-        "message": (
-            "Mock surge override executed successfully. "
-            "Approval controls will be applied in Day 4."
+        "risk_level": risk["risk_level"],
+        "approval_required": (
+            risk["approval_required"]
         ),
     }
 
+    output_check = validate_tool_output(
+        "calculate_driver_incentive",
+        result,
+    )
 
-# ============================================================
-# OLLAMA TOOL DEFINITIONS
-# ============================================================
+    if not output_check["valid"]:
+        return {
+            "success": False,
+            "tool": "calculate_driver_incentive",
+            "error": output_check["error"],
+        }
 
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_airport_metrics",
-            "description": (
-                "Retrieve current operational metrics "
-                "for a specific airport."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "airport_code": {
-                        "type": "string",
-                        "description": (
-                            "Airport code such as SFO, LAX, or JFK."
-                        ),
-                    }
-                },
-                "required": [
-                    "airport_code"
-                ],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "calculate_driver_incentive",
-            "description": (
-                "Calculate the recommended driver incentive "
-                "for a given number of drivers and severity."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "driver_count": {
-                        "type": "integer",
-                        "description": (
-                            "Number of drivers."
-                        ),
-                    },
-                    "severity_level": {
-                        "type": "string",
-                        "enum": [
-                            "LOW",
-                            "MEDIUM",
-                            "HIGH",
-                        ],
-                        "description": (
-                            "Operational severity level."
-                        ),
-                    },
-                },
-                "required": [
-                    "driver_count",
-                    "severity_level",
-                ],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "trigger_surge_override",
-            "description": (
-                "Trigger a mock surge override "
-                "for a specific airport."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "airport_code": {
-                        "type": "string",
-                        "description": (
-                            "Airport code such as SFO, LAX, or JFK."
-                        ),
-                    },
-                    "new_multiplier": {
-                        "type": "number",
-                        "description": (
-                            "New surge multiplier."
-                        ),
-                    },
-                    "reason": {
-                        "type": "string",
-                        "description": (
-                            "Reason for the surge override."
-                        ),
-                    },
-                },
-                "required": [
-                    "airport_code",
-                    "new_multiplier",
-                    "reason",
-                ],
-            },
-        },
-    },
-]
+    return result
 
 
 # ============================================================
-# TOOL DISPATCHER
+# TOOL 3 — SAFE SURGE OVERRIDE
 # ============================================================
 
-def execute_tool(tool_name, arguments):
+def trigger_surge_override(
+    airport_code: Any,
+    new_multiplier: Any,
+    reason: Any,
+) -> Dict[str, Any]:
     """
-    Execute a tool using its name and arguments.
+    Day 4 SAFE surge override.
+
+    IMPORTANT:
+
+    The surge action will NOT execute unless:
+
+    1. Airport is valid
+    2. Multiplier is valid
+    3. Reason is present
+    4. Requested surge is within policy
+    5. Risk classification passes
+    6. Human explicitly approves
+
+    The AI cannot bypass the approval layer.
     """
 
-    if tool_name == "get_airport_metrics":
+    print()
+    print("[DAY 4 GUARDRAIL]")
+    print("Validating surge override request...")
 
-        return get_airport_metrics(
-            arguments.get("airport_code")
+    # --------------------------------------------------------
+    # 1. Airport validation
+    # --------------------------------------------------------
+
+    airport_validation = validate_airport_code(
+        airport_code
+    )
+
+    if not airport_validation["valid"]:
+        result = {
+            "success": False,
+            "tool": "trigger_surge_override",
+            "status": "BLOCKED",
+            "risk_level": "BLOCKED",
+            "error": airport_validation["error"],
+        }
+
+        print(
+            "[GUARDRAIL] BLOCKED:",
+            airport_validation["error"],
         )
 
-    if tool_name == "calculate_driver_incentive":
+        return result
 
-        return calculate_driver_incentive(
-            arguments.get("driver_count"),
-            arguments.get("severity_level"),
+    airport = airport_validation[
+        "airport_code"
+    ]
+
+    # --------------------------------------------------------
+    # 2. Surge validation
+    # --------------------------------------------------------
+
+    surge_validation = validate_surge_multiplier(
+        new_multiplier
+    )
+
+    if not surge_validation["valid"]:
+        result = {
+            "success": False,
+            "tool": "trigger_surge_override",
+            "status": "BLOCKED",
+            "risk_level": "BLOCKED",
+            "error": surge_validation["error"],
+        }
+
+        print(
+            "[GUARDRAIL] BLOCKED:",
+            surge_validation["error"],
         )
 
-    if tool_name == "trigger_surge_override":
+        return result
 
-        return trigger_surge_override(
-            arguments.get("airport_code"),
-            arguments.get("new_multiplier"),
-            arguments.get("reason"),
+    multiplier = surge_validation[
+        "new_multiplier"
+    ]
+
+    # --------------------------------------------------------
+    # 3. Reason validation
+    # --------------------------------------------------------
+
+    reason_validation = validate_reason(
+        reason
+    )
+
+    if not reason_validation["valid"]:
+        result = {
+            "success": False,
+            "tool": "trigger_surge_override",
+            "status": "BLOCKED",
+            "risk_level": "BLOCKED",
+            "error": reason_validation["error"],
+        }
+
+        print(
+            "[GUARDRAIL] BLOCKED:",
+            reason_validation["error"],
         )
 
-    return {
-        "success": False,
-        "error": f"Unknown tool '{tool_name}'.",
+        return result
+
+    clean_reason = reason_validation["reason"]
+
+    # --------------------------------------------------------
+    # 4. Complete guardrail pipeline
+    # --------------------------------------------------------
+
+    guardrail_result = guard_surge_action(
+        airport_code=airport,
+        new_multiplier=multiplier,
+        reason=clean_reason,
+        policy_max_surge=1.5,
+    )
+
+    # --------------------------------------------------------
+    # 5. BLOCKED / REJECTED
+    # --------------------------------------------------------
+
+    if not guardrail_result["allowed"]:
+
+        print(
+            "[GUARDRAIL]",
+            guardrail_result["status"],
+        )
+
+        return {
+            "success": False,
+            "tool": "trigger_surge_override",
+            "status": guardrail_result["status"],
+            "risk_level": guardrail_result[
+                "risk_level"
+            ],
+            "airport_code": airport,
+            "new_multiplier": multiplier,
+            "reason": clean_reason,
+            "policy_result": guardrail_result.get(
+                "policy_result"
+            ),
+            "approval_required": guardrail_result.get(
+                "approval_required",
+                False,
+            ),
+            "approval_decision": guardrail_result.get(
+                "approval_decision"
+            ),
+            "error": guardrail_result["reason"],
+        }
+
+    # --------------------------------------------------------
+    # 6. APPROVED
+    # --------------------------------------------------------
+
+    print(
+        "[GUARDRAIL] APPROVED - executing mock action..."
+    )
+
+    result = {
+        "success": True,
+        "tool": "trigger_surge_override",
+        "execution": "MOCK",
+        "airport_code": airport,
+        "new_multiplier": multiplier,
+        "reason": clean_reason,
+        "risk_level": guardrail_result[
+            "risk_level"
+        ],
+        "policy_result": guardrail_result[
+            "policy_result"
+        ],
+        "approval_required": guardrail_result[
+            "approval_required"
+        ],
+        "approval_decision": guardrail_result[
+            "approval_decision"
+        ],
+        "status": "SURGE_OVERRIDE_TRIGGERED",
+        "message": (
+            "Mock surge override executed successfully "
+            "after Day 4 guardrail validation and "
+            "human approval."
+        ),
     }
+
+    output_check = validate_tool_output(
+        "trigger_surge_override",
+        result,
+    )
+
+    if not output_check["valid"]:
+        return {
+            "success": False,
+            "tool": "trigger_surge_override",
+            "status": "BLOCKED",
+            "error": output_check["error"],
+        }
+
+    return result
+
+
+# ============================================================
+# TOOL TEST
+# ============================================================
+
+if __name__ == "__main__":
+
+    print("=" * 70)
+    print("DAY 4 SAFE TOOLS TEST")
+    print("=" * 70)
+
+    print("\nTEST 1 - Airport metrics")
+    print(
+        get_airport_metrics("SFO")
+    )
+
+    print("\nTEST 2 - Invalid airport")
+    print(
+        get_airport_metrics("UNKNOWN")
+    )
+
+    print("\nTEST 3 - Driver incentive")
+    print(
+        calculate_driver_incentive(
+            40,
+            "HIGH",
+        )
+    )
+
+    print("\nTEST 4 - Invalid driver count")
+    print(
+        calculate_driver_incentive(
+            -50,
+            "HIGH",
+        )
+    )
+
+    print("\nTEST 5 - Invalid surge")
+    print(
+        trigger_surge_override(
+            "SFO",
+            100,
+            "high demand",
+        )
+    )
+
+    print("\nTEST 6 - Policy violation")
+    print(
+        trigger_surge_override(
+            "SFO",
+            1.6,
+            "high demand",
+        )
+    )
+
+    print("\nTEST 7 - Valid HIGH risk action")
+    print(
+        trigger_surge_override(
+            "SFO",
+            1.5,
+            "completion rate below threshold",
+        )
+    )
